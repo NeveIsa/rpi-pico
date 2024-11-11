@@ -21,13 +21,18 @@ logging.basicConfig(format="%(name)s:%(message)s", level=logging.INFO)
 class RPC:
     def __init__(self, ip="0.0.0.0", port=5001):
         logger.info(f"UDP RPC object at {ip}:{port}")
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind((ip, port))
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((ip, port))
+
+        self.sock = sock
         self.functions = {}
 
     def register(self, func):
         assert type(func) in [FnType, BoundMethodType]
         self.functions[func.__name__] = func
+        logger.info(f"Registered -> {func.__name__}")
         return func
 
     def deregister(self, func):
@@ -38,6 +43,7 @@ class RPC:
         else:
             return False
         del self.functions[func]
+        logger.info(f"Deregistered -> {func.__name__}")
         return True
 
     def handle(self):
