@@ -1,0 +1,2 @@
+MOTPIN = 0
+POTPIN = 26
