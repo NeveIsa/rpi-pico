@@ -5,6 +5,10 @@ try:
     from types import FunctionType as FnType
 except:
     FnType = type(lambda: 1)
+    class lorem:
+        def ipsum: pass
+    BoundMethodType = type(lorem().ipsum) # type = bound_method
+    del lorem # cleanup
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,12 +23,12 @@ class RPC:
         self.functions = {}
 
     def register(self, func):
-        assert type(func) is FnType
+        assert type(func) in [FnType, BoundMethodType]
         self.functions[func.__name__] = func
         return func
 
     def deregister(self, func):
-        if type(func) is FnType:
+        if type(func) in [FnType,BoundMethodType]:
             func = func.__name__
         elif type(func) is str:
             pass
