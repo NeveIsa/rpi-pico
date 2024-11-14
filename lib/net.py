@@ -50,13 +50,22 @@ def setup(ssid, password=""):
     return ssid, ifconfig[0]
 
 
-### check if conf has WLAN details
-from config import config
+def autosetup():
+    ### check if conf has WLAN details
+    from config import config
 
-if "WLAN" in config:
-    if not wlan.isconnected():
-        print(f"Found config, attempting ssid = {config['WLAN']['ssid']}")
-        status = setup(config["WLAN"]["ssid"], config["WLAN"]["pass"])
-        print(status)
+    if "WLAN" in config:
+        network.hostname(config["WLAN"]["hostname"])  # set hostname
+        if not wlan.isconnected():
+            print(f"Found config, attempting ssid = {config['WLAN']['ssid']}")
+            status = setup(config["WLAN"]["ssid"], config["WLAN"]["pass"])
+            print(status)
+            return status
+        else:
+            ifconfig = wlan.ifconfig()
+            ssid = wlan.config("ssid")
+            print("Already connected with IP:", ifconfig[0])
+            status = ssid,ifconfig
+            return status
     else:
-        print("Already connected with IP:", wlan.ifconfig()[0])
+        print("WLAN not found in config file")

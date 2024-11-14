@@ -1,5 +1,6 @@
 import socket
 import json
+import select
 
 try:
     from types import FunctionType as FnType
@@ -46,7 +47,16 @@ class RPC:
         logger.info(f"Deregistered -> {func.__name__}")
         return True
 
-    def handle(self):
+    def handle(self, timeout=None):
+        """ timeout is the select.select timeout
+        for async operation """
+        rlist, wlist, elist = [self.sock], [], []
+        
+        # block for timout seconds, when None, block indefinitely
+        readable, writable, exceptional = select.select(rlist, wlist, elist, timeout)
+
+        if self.sock not in readable: # if sock is not readable yet, return False
+            return False
         data, addr = self.sock.recvfrom(1024)
         try:
             payload = json.loads(data)
