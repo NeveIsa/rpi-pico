@@ -1,16 +1,18 @@
+import json, os
 from machine import Pin, PWM, ADC, I2C
 from ssd1306 import SSD1306_I2C
 import conf
 from udprpc import RPC
-from time import sleep_ms
+from time import sleep_ms, time
 import net
 
 
 class Device:
-    def __init__(self, motpin, potpin):
+    def __init__(self, motpin, potpin, btnpin):
         self.motor = PWM(Pin(motpin), freq=20000)
         self.pot = ADC(Pin(potpin))
         self.motorduty = 0
+        self.btnpin = Pin(btnpin, Pin.IN, Pin.PULL_UP)
 
     def setpwm(self, val):
         self.motorduty = val
@@ -19,14 +21,20 @@ class Device:
     def getadc(self):
         return self.pot.read_u16() // 2**6
 
+    def readbtn(self):
+        return self.btnpin.value()
 
-# NETWORK #
+
+######## INIT DEVICE ########
+dev = Device(conf.MOTPIN, conf.POTPIN, conf.BTNPIN)
+
+
+######## NETWORK ########
 ssid, ifconfig = net.autosetup()
 print("WLAN STATUS: ", ssid, ifconfig[0])
 
-# RPC #
+######## RPC ########
 rpc = RPC()
-dev = Device(conf.MOTPIN, conf.POTPIN)
 rpc.register(dev.setpwm)
 rpc.register(dev.getadc)
 
@@ -36,7 +44,7 @@ def listall():
     return list(rpc.functions)
 
 
-# OLED #
+######## OLED ########
 i2cdev = I2C(conf.I2CBUSID, freq=1000_000)
 XRES, YRES = 128, 32
 oled = SSD1306_I2C(XRES, YRES, i2cdev)
@@ -68,13 +76,69 @@ def info2oled(pagenums=[]):
         oled.show()
 
 
-info2oled()
+######## CALIBRATE ########
+def getcalibvals():
+    # wait till button is pressed
+    while dev.readbtn():
+        oled.text(f"map -90 deg: {dev.getadc()}", 0, 16)
+        oled.show_page(2)
+    neg90potval = dev.getadc()  # read and set
+
+    while dev.readbtn():  # wait again
+        oled.text(f"map -90 deg: {dev.getadc()}", 0, 24)
+        oled.show_page(3)
+    pos90potval = dev.getadc()
+
+    calib = {"neg90potval": neg90potval, "pos90potval": pos90potval}
+
+    # save to file/flash for non-volatility and load on next boot
+    with open("calibration.json", "w") as g:
+        g.write(json.dumps(calib))
+
+    return calib
 
 
-# RUN #
+def calibrate():
+    # clear the last 2 lines/pages
+    #oled.text(" " * (128 // 8), 0, 16)
+    #oled.text(" " * (128 // 8), 0, 24)
+    oled.fill(0)
+    oled.show()
+
+    calfile = "calibration.json"
+    if calfile not in os.listdir():
+        calib = getcalibvals()  # ask to set
+    else:
+        calib = json.load(open(calfile))  # retrive previous setting
+
+        # prompt if they want to recalibrate
+        oled.text("press button..", 0, 16)
+        oled.text("..to recalibrate", 0, 24)
+        oled.show_page(2)
+        oled.show_page(3)
+
+        now = time()
+        while time() - now < 5:  # check btn press for 5 seconds
+            if dev.readbtn() == 0:  # btn pressed
+                calib = getcalibvals()
+                break
+
+    return calib
+
+
+
+
+####### APP INIT #######
+def init():
+    # initilize info to oled
+    info2oled()
+    
+    # get calibration vals
+    calib = calibrate() 
+
+
+######## APP RUN ########
 SKIPVAL = 2500
-
-
 def run():
     skip = SKIPVAL
     while True:
