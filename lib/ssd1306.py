@@ -25,6 +25,7 @@ SET_PRECHARGE = const(0xD9)
 SET_VCOM_DESEL = const(0xDB)
 SET_CHARGE_PUMP = const(0x8D)
 
+
 # Subclassing FrameBuffer provides support for graphics primitives
 # http://docs.micropython.org/en/latest/pyboard/library/framebuf.html
 class SSD1306(framebuf.FrameBuffer):
@@ -102,6 +103,30 @@ class SSD1306(framebuf.FrameBuffer):
         self.write_cmd(self.pages - 1)
         self.write_data(self.buffer)
 
+    def show_page(self, pagenum):
+        """Update only the given page_number (row)
+        by copying the specific page from the buffer
+        to the Display RAM of the oled which is
+        quicker than updating the entire display
+        by copying the entire buffer. This is mostly
+        helpful for time sensitive code that can't
+        afford too much time updating the oled"""
+
+        x0 = 0
+        x1 = self.width - 1
+        if self.width == 64:
+            # displays with width of 64 pixels are shifted by 32
+            x0 += 32
+            x1 += 32
+        self.write_cmd(SET_COL_ADDR)
+        self.write_cmd(x0)
+        self.write_cmd(x1)
+        self.write_cmd(SET_PAGE_ADDR)
+        self.write_cmd(pagenum)  # Start at pagenum
+        self.write_cmd(pagenum)  # End at pagenum
+        page_to_show = self.buffer[self.width * pagenum : self.width * (pagenum + 1)]
+        self.write_data(page_to_show)
+
 
 class SSD1306_I2C(SSD1306):
     def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
@@ -119,6 +144,7 @@ class SSD1306_I2C(SSD1306):
     def write_data(self, buf):
         self.write_list[1] = buf
         self.i2c.writevto(self.addr, self.write_list)
+
 
 # only required for SPI version (not covered in this project)
 class SSD1306_SPI(SSD1306):

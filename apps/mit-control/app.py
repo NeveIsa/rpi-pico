@@ -43,7 +43,13 @@ oled = SSD1306_I2C(XRES, YRES, i2cdev)
 sleep_ms(100)
 
 
-def info2oled():
+def info2oled(pagenums=[]):
+    """if pagenum is a positive number, then
+    only that specific page will be updated
+    instead of updating the whole oled which
+    is slow because of writing the entire
+    framebuffer into the oled Display RAM"""
+
     oled.fill(0)  # all black
     # oled.show()
 
@@ -55,7 +61,11 @@ def info2oled():
     oled.text(f"ADC: {dev.getadc()}", 0, 16)
     oled.text(f"PWM: {dev.motorduty}", 0, 24)
 
-    oled.show()
+    if len(pagenums) > 0:  # only update the give pagenums
+        for pn in pagenums:
+            oled.show_page(pn)
+    else:
+        oled.show()
 
 
 info2oled()
@@ -63,6 +73,8 @@ info2oled()
 
 # RUN #
 SKIPVAL = 2500
+
+
 def run():
     skip = SKIPVAL
     while True:
@@ -72,7 +84,7 @@ def run():
         # hence we call this only once in a while
 
         if skip == SKIPVAL:
-            info2oled()
+            info2oled([2, 3])
             skip = 0
         else:
             skip += 1

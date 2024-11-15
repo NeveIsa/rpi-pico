@@ -65,7 +65,7 @@ def autosetup():
             ifconfig = wlan.ifconfig()
             ssid = wlan.config("ssid")
             print("Already connected with IP:", ifconfig[0])
-            status = ssid,ifconfig
+            status = ssid, ifconfig
             return status
     else:
         print("WLAN not found in config file")
