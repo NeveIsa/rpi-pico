@@ -8,11 +8,12 @@ import net
 
 
 class Device:
-    def __init__(self, motpin, potpin, btnpin):
+    def __init__(self, motpin, potpin, btnpin, buzpin):
         self.motor = PWM(Pin(motpin), freq=20000)
         self.pot = ADC(Pin(potpin))
         self.motorduty = 0
         self.btnpin = Pin(btnpin, Pin.IN, Pin.PULL_UP)
+        self.buzpin = Pin(buzpin, Pin.OUT)
 
     def setpwm(self, val):
         self.motorduty = val
@@ -22,11 +23,25 @@ class Device:
         return self.pot.read_u16() // 2**6
 
     def readbtn(self):
-        return self.btnpin.value()
+        btn = self.btnpin.value()
+        if btn:  # not pressed
+            return btn  # return immediately
+        else:  # pressed
+            self.buzz(75)  # buzz + debounce for 75ms
+            while not self.btnpin.value():
+                pass  # wait untill released
+            self.buzz(50)  # buzz + debounce
+            return btn
+
+    def buzz(self, beepms=100):
+        """beepms is millisecs to beep"""
+        self.buzpin.on()
+        sleep_ms(beepms)
+        self.buzpin.off()
 
 
 ######## INIT DEVICE ########
-dev = Device(conf.MOTPIN, conf.POTPIN, conf.BTNPIN)
+dev = Device(conf.MOTPIN, conf.POTPIN, conf.BTNPIN, conf.BUZPIN)
 
 
 ######## NETWORK ########
@@ -80,14 +95,19 @@ def info2oled(pagenums=[]):
 def getcalibvals():
     # wait till button is pressed
     while dev.readbtn():
-        oled.text(f"map -90 deg: {dev.getadc()}", 0, 16)
-        oled.show_page(2)
+        oled.fill(0)
+        oled.text(f"map -90deg: {dev.getadc()}", 0, 16)
+        oled.show()
     neg90potval = dev.getadc()  # read and set
 
     while dev.readbtn():  # wait again
-        oled.text(f"map -90 deg: {dev.getadc()}", 0, 24)
-        oled.show_page(3)
+        oled.fill(0)
+        oled.text(f"map -90deg: {neg90potval}", 0, 16)
+        oled.text(f"map +90deg: {dev.getadc()}", 0, 24)
+        oled.show()
     pos90potval = dev.getadc()
+
+    sleep_ms(1000)  # keep the info on the oled for 1 sec for user to read.
 
     calib = {"neg90potval": neg90potval, "pos90potval": pos90potval}
 
@@ -100,8 +120,8 @@ def getcalibvals():
 
 def calibrate():
     # clear the last 2 lines/pages
-    #oled.text(" " * (128 // 8), 0, 16)
-    #oled.text(" " * (128 // 8), 0, 24)
+    # oled.text(" " * (128 // 8), 0, 16)
+    # oled.text(" " * (128 // 8), 0, 24)
     oled.fill(0)
     oled.show()
 
@@ -111,34 +131,47 @@ def calibrate():
     else:
         calib = json.load(open(calfile))  # retrive previous setting
 
-        # prompt if they want to recalibrate
-        oled.text("press button..", 0, 16)
-        oled.text("..to recalibrate", 0, 24)
-        oled.show_page(2)
-        oled.show_page(3)
+        then = time()
 
-        now = time()
-        while time() - now < 5:  # check btn press for 5 seconds
+        USER_RESPOND_TIMELIMIT = 7  # in seconds
+        while (
+            time_remaining := time() - then
+        ) < USER_RESPOND_TIMELIMIT:  # check btn press for 5 seconds
             if dev.readbtn() == 0:  # btn pressed
                 calib = getcalibvals()
                 break
+            # prompt if they want to recalibrate
+            oled.fill(0)
+            oled.text(f"press btn..({USER_RESPOND_TIMELIMIT - time_remaining}s)", 0, 16)
+            oled.text("..to recalibrate", 0, 24)
+            oled.show()
 
     return calib
 
 
-
-
 ####### APP INIT #######
 def init():
+    # starting buzz
+    dev.buzz(50)
+    sleep_ms(50)
+    dev.buzz(50)
+    sleep_ms(100)
+    dev.buzz(100)
     # initilize info to oled
     info2oled()
-    
+
     # get calibration vals
-    calib = calibrate() 
+    calib = calibrate()
+    oled.fill(0)
+    oled.text("Calibrated...", 0, 16)
+    oled.show()
+    sleep_ms(1000)  # give user 1 sec to read the oled
 
 
 ######## APP RUN ########
 SKIPVAL = 2500
+
+
 def run():
     skip = SKIPVAL
     while True:
