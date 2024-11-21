@@ -1,3 +1,4 @@
+{"ACCESSPOINT":{"ssid":"MITx 6.302.0x", "pass":"picoMITx"}}
 {"WLAN":{"ssid":"SKYNET","pass":"iwillbeback","hostname":"piconsys"}}
 {"INIT":{"file":"filepath_to_be_called_by_main_to_autorun_at_startup.py"}}
 {"UDPRPC":{"port":5001}}
