@@ -8,7 +8,7 @@ class Request:
         pass
 
     def __call__(self, rawhttp):
-        header_end = rawhttp.index("\r\n")  # first index of "\n\n"
+        header_end = rawhttp.index("\r\n")  # first index of "\r\n"
         head, self.body = rawhttp[:header_end], rawhttp[header_end:]
 
         head = head.split("\r\n")
@@ -61,12 +61,15 @@ class Response:
 
 
 class HTTPico:
-    def __init__(self, host, port, fbroot=None):
+    def __init__(self, host, port, fbroot=None, fbroute=""):
         """
         enable filebrowser with root at fbroot
         fbroot cannot start with a dot relative path
         valid examples: lorem/ipsum, /home/lorem/ipsum
         invalid examples: ./lorem, ./lorem/ipsum
+
+        fbroute is the webroot where the file browser will lie w.r.t
+        the web domain.
         """
         self.host = host
         self.port = port
@@ -89,6 +92,9 @@ class HTTPico:
                 "."
             ), "fbroot cannot be a dot relative path, i.e it cannot start with a dot(.)"
         self.fbroot = fbroot
+        self.fbroute = (
+            fbroute if fbroute.startswith("/") else f"/{fbroute}"
+        )  # has to start with /
 
     def start(self, timeout=None, conn_queue_size=7):
         self.sock.bind((self.host, self.port))
@@ -117,7 +123,7 @@ class HTTPico:
                     rawresp = cb(**kwargs)
                     resp = self.response(rawresp, req, statuscode=stscode)
 
-                # serve files
+                # serve files (if starts with fbroute)
                 elif (rawresp := self.filebrowse(req.route)) != (None, None):
                     stscode = 200
                     filesize, chunked_fileread_generator = rawresp
@@ -167,30 +173,34 @@ class HTTPico:
 
         return wrapper
 
-    def filebrowse(self, path):
+    def filebrowse(self, route):
         if self.fbroot == None:  # if fbrowser not enabled, return None immediately
             return None, None
+        if not route.startswith(self.fbroute):  # not to be handled by filebrowser
+            return None, None
         else:
-            path = path[1:] if path.startswith("/") else path
-            realpath = os.path.join(self.fbroot, path)  # get realpath
-        if os.path.isfile(realpath):
+            fspath = os.path.join(
+                self.fbroot, route[len(self.fbroute) + 1 :]
+            )  # len(...)+1 is to remove the / at the begining and get fspath (path on the filesystem), check help(os.path.join) to know why
+            print(fspath)
+        if os.path.isfile(fspath):
             # return generator
             def fread_chunked():
-                with open(realpath, "r") as f:
+                with open(fspath, "r") as f:
                     while chunk := f.read(2048):  # default chunk size of 2048
                         yield chunk
 
-            return os.path.getsize(realpath), fread_chunked()
+            return os.path.getsize(fspath), fread_chunked()
 
-        elif os.path.isdir(realpath):
-            children = os.listdir(realpath)
-            children = [(child, os.path.join(realpath, child)) for child in children]
+        elif os.path.isdir(fspath):
+            children = os.listdir(fspath)
+            children = [(child, os.path.join(fspath, child)) for child in children]
 
             # body
             html = f"""
                     <body>
                     <h2>HTTPico File Browser</h2>
-                    <h3>pwd: {realpath}</h3>"""
+                    <h3>pwd: {fspath}</h3>"""
 
             # file table
             html += f"""<table>
@@ -204,7 +214,7 @@ class HTTPico:
                     <tr>
                         <td></td>
                         <td></td>
-                        <td> <a style="color:forestgreen" href="{realpath}">..</a> </td>
+                        <td> <a style="color:forestgreen" href="{os.path.dirname(route)}">..</a> </td>
                     </tr>
                     """
 
@@ -214,7 +224,7 @@ class HTTPico:
                     <td>{filesize}</td>
                     <td>{modtime}</td>
                     <td>
-                        <a style="color: {childcolor};" href="{childpath}">{childname}</a>
+                        <a style="color: {childcolor};" href="{childroute}">{childname}</a>
                     </td>
                     
                     </tr>""".format(
@@ -223,7 +233,7 @@ class HTTPico:
                         else os.path.getsize(childpath)
                         if os.path.getsize(childpath) < 1024
                         else f"{(os.path.getsize(childpath)/1024):.1f}",
-                        childpath=childpath,
+                        childroute=os.path.join(route, childname),
                         childname=childname,
                         childcolor="springgreen"
                         if os.path.isdir(childpath)
@@ -288,7 +298,7 @@ if __name__ == "__main__":
 
     HOST, PORT = "localhost", 2345
 
-    app = HTTPico(HOST, PORT, fbroot="")
+    app = HTTPico(HOST, PORT, fbroot="templates", fbroute="files")
 
     @app.get("/")
     def g():
