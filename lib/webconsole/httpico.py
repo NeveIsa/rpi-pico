@@ -30,6 +30,53 @@ class Request:
 
         self.route = route[0]
 
+        # extract paramters/data from POST
+        if not "Content-Length" in self.headers:
+            pass
+        elif self.headers["Content-Length"] > 0:
+            if self.headers["Content-Type"] == "application/x-www-form-urlencoded":
+                # parse FROM params
+                self.form = {}
+                for q in self.body.split("&"):
+                    qkey, qval = q.split("=")
+                    self.form[qkey] = qval
+
+            elif "multipart/form-data" in (conttype := self.headers["Content-Type"]):
+                # check if has boundaries
+                boundary = None
+                cnts = conttype.split(f";")
+                for cnt in cnts:
+                    if "boundary" in cnt:
+                        boundary = cnt.split("=")[1]
+
+                if boundary != None:
+                    dataparts = self.body.split(f"--{boundary}")
+                    for datapt in dataparts:
+                        header, payload = datapt.split("\r\n")
+                        for head in header.split("\r\n"):
+                            if head.startswith("Content-Disposition:"):
+                                cdispositions = head[len("Content-Disposition:") :]
+                                if "filename:" in cdispositions:
+                                    for cdisp in cdispositions.split(";"):
+                                        if "filename:" in cdisp:
+                                            newfname = cdisp.split("=")[
+                                                1
+                                            ]  # eg. "harehare.txt" with quotes
+                                            newfname = newfname[
+                                                1:-1
+                                            ]  # now it is harehare.txt without quotes
+                                # check if filename present
+                                if os.path.exists(newfname):
+                                    logger.info(f"File: {newfname} exists already")
+                                else:
+                                    try:
+                                        with open(newfname, "w") as g:
+                                            g.write(payload)
+                                    except:
+                                        logger.info(
+                                            f"Error opening file:{newfname} to write !"
+                                        )
+
 
 class Response:
     def __init__(self):
@@ -145,7 +192,10 @@ class HTTPico:
                     clientsock.sendall(resp.encode())
 
             elif req.method == "POST":
-                pass
+                if req.route in self.posts:
+                    stscode = 200
+                    cb = self.posts[req.route]
+                    realpath
 
             # log
             self.logger.info(
@@ -200,7 +250,12 @@ class HTTPico:
             html = f"""
                     <body>
                     <h2>HTTPico File Browser</h2>
-                    <h3>pwd: {fspath}</h3>"""
+                    <h3>pwd: <u>{fspath}</u></h3></br>
+                    <form>
+                       <label for="files">Upload:</label> 
+                        <input type="file"i required></input>
+                        <input type="submit"></input>
+                    </form></br></br>"""
 
             # file table
             html += f"""<table>
@@ -259,7 +314,7 @@ class HTTPico:
                 color: indianred;
             }
             h3{
-                color: darkviolet;
+                color: gold;
             }
             table {
               width: 50%;
@@ -277,6 +332,26 @@ class HTTPico:
 
             thead {
               font-weight: bold;
+              font-style: italic;
+            }
+
+            form label{
+                color: deepskyblue;
+                font-weight: bold;
+                font-size: 1.25em;
+                text-decoration: underline;
+                margin-right: 1em;
+            }
+            form input::file-selector-button{
+                background: lightSteelBlue;
+            }
+            form input[type=file]{
+                color: deepskyblue;
+                font-style: italic;
+                font-weight: bold;
+            }
+            form input[type=submit]{
+                background: lightSteelBlue
             }
             </style>
             """
