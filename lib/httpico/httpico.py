@@ -1,21 +1,22 @@
 import os, sys, json, logging
 from socket import socket, SOCK_STREAM, AF_INET, SOL_SOCKET, SO_REUSEADDR
 from datetime import datetime as dtime
+from types import NoneType
 
 
 class Request:
     def __init__(self):
-        pass
+        self.logger = logging.getLogger(__name__)
 
     def __call__(self, rawhttp):
-        header_end = rawhttp.index("\r\n")  # first index of "\r\n"
-        head, self.body = rawhttp[:header_end], rawhttp[header_end:]
-
+        header_end = rawhttp.index("\r\n\r\n")  # first index of "\r\n\r\n"
+        head, self.body = rawhttp[:header_end], rawhttp[header_end + 4 :]
         head = head.split("\r\n")
         self.method, self.rawpath, self.version = head.pop(0).strip().split(" ")
         self.headers = {}
         for h in head:
-            key, val = h.strip().split(":")
+            first_colon_index = h.index(":")
+            key, val = h[:first_colon_index], h[first_colon_index + 1 :].strip()
             self.headers[key] = val
 
         # extract GET parameters if there is one
@@ -24,19 +25,25 @@ class Request:
             get_params = route[1]
             # parse GET params
             self.query = {}
-            for q in get_params.split("&"):
-                qkey, qval = q.split("=")
-                self.query[qkey] = qval
-
+            try:
+                for q in get_params.split("&"):
+                    qkey, qval = q.split("=")
+                    self.query[qkey] = qval
+            except:
+                self.logger.info(
+                    "Failed to parse query fields from get_params in the URL !"
+                )
         self.route = route[0]
 
         # extract paramters/data from POST
-        if not "Content-Length" in self.headers:
-            pass
-        elif self.headers["Content-Length"] > 0:
-            if self.headers["Content-Type"] == "application/x-www-form-urlencoded":
+        if self.method == "POST" and (int(self.headers["Content-Length"]) > 0):
+            # variables to be expected when handling a POST request.
+            self.form = {}
+
+            if (
+                self.headers["Content-Type"] == "application/x-www-form-urlencoded"
+            ) and (int(self.headers["Content-Length"].split(":")) > 0):
                 # parse FROM params
-                self.form = {}
                 for q in self.body.split("&"):
                     qkey, qval = q.split("=")
                     self.form[qkey] = qval
@@ -50,38 +57,56 @@ class Request:
                         boundary = cnt.split("=")[1]
 
                 if boundary != None:
-                    dataparts = self.body.split(f"--{boundary}")
+                    end_boundary_removed_body = self.body.split(f"--{boundary}--")[0]
+                    dataparts = end_boundary_removed_body.split(f"--{boundary}\r\n")
                     for datapt in dataparts:
-                        header, payload = datapt.split("\r\n")
-                        for head in header.split("\r\n"):
+                        if not "\r\n\r\n" in datapt:
+                            continue
+                        __headers, payload = datapt.split("\r\n\r\n")  # headers and
+                        payload = payload[
+                            :-2
+                        ]  # the last two bytes are \r\n and are not part of the payload
+                        for head in __headers.split("\r\n"):
                             if head.startswith("Content-Disposition:"):
                                 cdispositions = head[len("Content-Disposition:") :]
-                                if "filename:" in cdispositions:
-                                    for cdisp in cdispositions.split(";"):
-                                        if "filename:" in cdisp:
-                                            newfname = cdisp.split("=")[
-                                                1
-                                            ]  # eg. "harehare.txt" with quotes
-                                            newfname = newfname[
-                                                1:-1
-                                            ]  # now it is harehare.txt without quotes
-                                # check if filename present
-                                if os.path.exists(newfname):
-                                    logger.info(f"File: {newfname} exists already")
-                                else:
-                                    try:
-                                        with open(newfname, "w") as g:
-                                            g.write(payload)
-                                    except:
-                                        logger.info(
-                                            f"Error opening file:{newfname} to write !"
-                                        )
+                                if "form-data" in cdispositions:
+                                    # Content-Disposition: form-data; name="filedir"
+                                    for cdisp_part in cdispositions.split(";"):
+                                        if (
+                                            "name=" in cdisp_part
+                                        ):  # this handles both name=.. and filename=... | a problem with this is if someone is sending a variable named "filename" itself bnut we let it be for now.
+                                            if "filename=" in cdisp_part:
+                                                filename = cdisp_part.split("=")[
+                                                    -1
+                                                ]  # has surrounding double quotes
+                                                filename = filename[
+                                                    1:-1
+                                                ]  # remove the double quotes filename
+                                                self.form["filename"] = filename
+                                            else:
+                                                varname = cdisp_part.split("=")[
+                                                    1
+                                                ]  # varname = '"variable_name"'
+                                                varname = varname[
+                                                    1:-1
+                                                ]  # varname = 'variable_name'
+                                                self.form[varname] = payload
 
 
 class Response:
     def __init__(self):
-        self.statustext = {200: "OK", 404: "Not Found"}
-        self.contenttype = {str: "text/html; charset=UTF-8", dict: "application/json"}
+        self.statustext = {
+            200: "OK",
+            201: "Created",
+            404: "Not Found",
+            400: "Bad Request",
+            500: "Internal Server Error",
+        }
+        self.contenttype = {
+            NoneType: "text/html; charset=UTF-8",
+            str: "text/html; charset=UTF-8",
+            dict: "application/json",
+        }
         self.statuscode = 0  # inital val
 
     def __call__(self, body, request, statuscode=200, headers={}):
@@ -91,6 +116,13 @@ class Response:
             body if bodytype in [str, dict] else str(body)
         )  # to str if not str/dict(json)
         body = json.dumps(body) if bodytype is dict else body  # to json if a dict
+
+        # if body == None, then just fill statuscode with 404/400 for GET/POST
+        if bodytype == NoneType:
+            if request.method == "GET":
+                statuscode = 404  # not found
+            elif request.method == "POST":
+                statuscode = 400  # Bad request
 
         # set headers
         header = {"Content-Type": self.contenttype[bodytype]}
@@ -163,12 +195,15 @@ class HTTPico:
                 if req.route in self.gets:
                     stscode = 200
                     cb = self.gets[req.route]
-                    argnames = cb.__code__.co_varnames
+                    argnames = cb.__code__.co_varnames[cb.__code__.co_argcount]
                     kwargs = {}
                     for arg in argnames:
-                        val = req.query[arg] if arg in req.query else None
+                        kwargs[arg] = req.query[arg] if arg in req.query else None
                     rawresp = cb(**kwargs)
+                    if len(rawresp) > 1:
+                        stscode, rawresp = rawresp
                     resp = self.response(rawresp, req, statuscode=stscode)
+                    clientsock.sendall(resp.encode())  # send the response
 
                 # serve files (if starts with fbroute)
                 elif (rawresp := self.filebrowse(req.route)) != (None, None):
@@ -187,15 +222,33 @@ class HTTPico:
                 # not found
                 else:
                     stscode = 404
-                    rawresp = ""
+                    rawresp = f"{stscode} | NOT FOUND !!!"
                     resp = self.response(rawresp, req, stscode)
                     clientsock.sendall(resp.encode())
 
             elif req.method == "POST":
                 if req.route in self.posts:
-                    stscode = 200
+                    stscode = 201
                     cb = self.posts[req.route]
-                    realpath
+                    argnames = cb.__code__.co_varnames[
+                        : cb.__code__.co_argcount
+                    ]  # get names of arguments
+                    kwargs = {}
+                    for arg in argnames:
+                        kwargs[arg] = req.form[arg] if arg in req.form else None
+                    rawresp = cb(**kwargs)
+                    if len(rawresp) > 1:
+                        stscode, rawresp = rawresp
+                    resp = self.response(rawresp, req, statuscode=stscode)
+                    if len(rawresp) > 1:
+                        stscode, rawresp = rawresp
+                    clientsock.sendall(resp.encode())  # send the response
+
+                else:
+                    stscode = 400
+                    rawresp = f"{stscode} | BAD REQUEST !!!"
+                    resp = self.response(rawresp, req, stscode)
+                    clientsock.sendall(resp.encode())
 
             # log
             self.logger.info(
@@ -251,9 +304,10 @@ class HTTPico:
                     <body>
                     <h2>HTTPico File Browser</h2>
                     <h3>pwd: <u>{fspath}</u></h3></br>
-                    <form>
+                    <form action="/upload" method="post" enctype="multipart/form-data">
                        <label for="files">Upload:</label> 
-                        <input type="file"i required></input>
+                        <input name="filecontent" type="file" accept="*" required></input>
+                        <input name="filedir" type="text" value="{fspath}"></input>
                         <input type="submit"></input>
                     </form></br></br>"""
 
@@ -379,9 +433,26 @@ if __name__ == "__main__":
     def g():
         return open("templates/index.html").read()
 
-    @app.post("/get")
-    def p():
-        return {"hare": "krishna"}
+    @app.post("/upload")
+    def upload(filedir, filename, filecontent):
+        if type(filedir) == type(filename) == type(filecontent) == str:
+            pass
+        else:
+            return None
+
+        fspath = os.path.join(filedir, filename)
+        if os.path.exists(fspath):
+            return 400, {"status": 1, "info": f"file:{fspath} already exists !!!"}
+        else:
+            try:
+                with open(fspath, "w") as g:
+                    g.write(filecontent)
+                return 201, {
+                    "status": 0,
+                    "info": f"Succesfully wrote {len(filecontent)} bytes into: {fspath}",
+                }
+            except Exception as e:
+                return 500, {"status": 2, "info": f"Internal Server Exception -> {e}"}
 
     app.start()
 
