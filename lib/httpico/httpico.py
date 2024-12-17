@@ -9,7 +9,10 @@ class Request:
         self.logger = logging.getLogger(__name__)
 
     def __call__(self, rawhttp):
-        header_end = rawhttp.index("\r\n\r\n")  # first index of "\r\n\r\n"
+        if "\r\n\r\n" in rawhttp:
+            header_end = rawhttp.index("\r\n\r\n")  # first index of "\r\n\r\n"
+        else:
+            return
         head, self.body = rawhttp[:header_end], rawhttp[header_end + 4 :]
         head = head.split("\r\n")
         self.method, self.rawpath, self.version = head.pop(0).strip().split(" ")
@@ -158,6 +161,7 @@ class HTTPico:
         # handlers registry
         self.gets = {}
         self.posts = {}
+        self.deletes = {}
 
         # Req parser and Resp generator
         self.request = Request()
@@ -190,12 +194,23 @@ class HTTPico:
 
             req = self.request
             req(rawreq)
-            if req.method == "GET":
+
+            if req.method == "OPTIONS":  # for AJAX preflight
+                # allow all methods from all urls
+                opt_response = """
+                HTTP/1.1 204 No Content
+                Access-Control-Allow-Origin: *
+                Access-Control-Allow-Methods: GET, POST, OPTIONS
+                Access-Control-Allow-Headers: Content-Type
+                """
+                clientsock.sendall(opt_response)
+
+            elif req.method == "GET":
                 # registered gets
                 if req.route in self.gets:
                     stscode = 200
                     cb = self.gets[req.route]
-                    argnames = cb.__code__.co_varnames[cb.__code__.co_argcount]
+                    argnames = cb.__code__.co_varnames[: cb.__code__.co_argcount]
                     kwargs = {}
                     for arg in argnames:
                         kwargs[arg] = req.query[arg] if arg in req.query else None
@@ -226,6 +241,7 @@ class HTTPico:
                     resp = self.response(rawresp, req, stscode)
                     clientsock.sendall(resp.encode())
 
+            # HANDLE POSTs
             elif req.method == "POST":
                 if req.route in self.posts:
                     stscode = 201
@@ -240,9 +256,20 @@ class HTTPico:
                     if len(rawresp) > 1:
                         stscode, rawresp = rawresp
                     resp = self.response(rawresp, req, statuscode=stscode)
-                    if len(rawresp) > 1:
-                        stscode, rawresp = rawresp
                     clientsock.sendall(resp.encode())  # send the response
+                else:
+                    stscode = 400
+                    rawresp = f"{stscode} | BAD REQUEST !!!"
+                    resp = self.response(rawresp, req, stscode)
+                    clientsock.sendall(resp.encode())
+
+            # handle delete file in filebrowser
+            elif req.method == "DELETE":
+                if (rawresp := self.filebrowse(req.route, method=req.method)) != (
+                    None,
+                    None,
+                ):
+                    stscode, rawresp = rawresp
 
                 else:
                     stscode = 400
@@ -276,7 +303,13 @@ class HTTPico:
 
         return wrapper
 
-    def filebrowse(self, route):
+    def delete(self, path):
+        def wrapper(cb):
+            self.deletes[path] = cb
+
+        return wrapper
+
+    def filebrowse(self, route, method="GET"):
         if self.fbroot == None:  # if fbrowser not enabled, return None immediately
             return None, None
         if not route.startswith(self.fbroute):  # not to be handled by filebrowser
@@ -286,7 +319,9 @@ class HTTPico:
                 self.fbroot, route[len(self.fbroute) + 1 :]
             )  # len(...)+1 is to remove the / at the begining and get fspath (path on the filesystem), check help(os.path.join) to know why
             print(fspath)
-        if os.path.isfile(fspath):
+
+        # HANDLE GET
+        if method == "GET" and os.path.isfile(fspath):
             # return generator
             def fread_chunked():
                 with open(fspath, "r") as f:
@@ -295,7 +330,7 @@ class HTTPico:
 
             return os.path.getsize(fspath), fread_chunked()
 
-        elif os.path.isdir(fspath):
+        elif method == "GET" and os.path.isdir(fspath):
             children = os.listdir(fspath)
             children = [(child, os.path.join(fspath, child)) for child in children]
 
@@ -318,12 +353,14 @@ class HTTPico:
                             <th>Size</th>
                             <th>Last Modified</th>
                             <th>Name</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tr>
                         <td></td>
                         <td></td>
                         <td> <a style="color:forestgreen" href="{os.path.dirname(route)}">..</a> </td>
+                        <td></td>
                     </tr>
                     """
 
@@ -335,7 +372,9 @@ class HTTPico:
                     <td>
                         <a style="color: {childcolor};" href="{childroute}">{childname}</a>
                     </td>
-                    
+                    <td>
+                        <button onclick="deletefile('{childroute}')">delete</button>
+                    </td>
                     </tr>""".format(
                         filesize="---"
                         if os.path.isdir(childpath)
@@ -344,6 +383,7 @@ class HTTPico:
                         else f"{(os.path.getsize(childpath)/1024):.1f}",
                         childroute=os.path.join(route, childname),
                         childname=childname,
+                        childpath=childpath,
                         childcolor="springgreen"
                         if os.path.isdir(childpath)
                         else "magenta",
@@ -408,6 +448,12 @@ class HTTPico:
                 background: lightSteelBlue
             }
             </style>
+
+            <script>
+                function deletefile(fileroute){
+                fetch(fileroute, {method: 'DELETE'}).then(response=>{alert(response); window.location.reload(true)});
+                }
+            </script>
             """
             # return html
             return len(html), (
@@ -415,8 +461,43 @@ class HTTPico:
             )  # mimic filesize, chunked read generator
 
         # path not found - neither a file nor a directory
-        else:
+        elif method == "GET":
             return None, None
+
+        # HANDLE DELETE
+        elif method == "DELETE":
+            if os.path.isdir(fspath):
+                if len(os.listdir(fspath)) == 0:
+                    os.rmdir(fspath)
+                    return 200, {"status": 0, "info": f"deleted folder{fspath}"}
+                else:
+                    return 400, {status: 1, "info": f"failed! Directory not empty."}
+            elif os.path.isfile(fspath):
+                os.remove(fspath)
+                return 200, {"status": 0, "info": f"deleted file{fspath}"}
+            else:
+                return 400, {"status": 2, "info": f"failed to delete: {fspath}"}
+
+
+def fileuploader(filedir, filename, filecontent):
+    if type(filedir) == type(filename) == type(filecontent) == str:
+        pass
+    else:
+        return None
+
+    fspath = os.path.join(filedir, filename)
+    if os.path.exists(fspath):
+        return 400, {"status": 1, "info": f"file:{fspath} already exists !!!"}
+    else:
+        try:
+            with open(fspath, "w") as g:
+                g.write(filecontent)
+            return 201, {
+                "status": 0,
+                "info": f"Succesfully wrote {len(filecontent)} bytes into: {fspath}",
+            }
+        except Exception as e:
+            return 500, {"status": 2, "info": f"Internal Server Exception -> {e}"}
 
 
 if __name__ == "__main__":
@@ -433,26 +514,8 @@ if __name__ == "__main__":
     def g():
         return open("templates/index.html").read()
 
-    @app.post("/upload")
-    def upload(filedir, filename, filecontent):
-        if type(filedir) == type(filename) == type(filecontent) == str:
-            pass
-        else:
-            return None
-
-        fspath = os.path.join(filedir, filename)
-        if os.path.exists(fspath):
-            return 400, {"status": 1, "info": f"file:{fspath} already exists !!!"}
-        else:
-            try:
-                with open(fspath, "w") as g:
-                    g.write(filecontent)
-                return 201, {
-                    "status": 0,
-                    "info": f"Succesfully wrote {len(filecontent)} bytes into: {fspath}",
-                }
-            except Exception as e:
-                return 500, {"status": 2, "info": f"Internal Server Exception -> {e}"}
+    # file upload
+    app.post("/upload")(fileuploader)
 
     app.start()
 
